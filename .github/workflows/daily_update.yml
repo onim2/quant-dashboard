@@ -23,7 +23,7 @@ jobs:
 
       - name: Run Update Script
         env:
-          # 금고 이름과 파이썬 우편함 이름을 정확히 매칭
+          # 금고 상자 이름(Secrets)을 대문자 ROOT와 YYY로 정확히 연결
           DB_USER: ${{ secrets.YYY }}
           DB_PASSWORD: ${{ secrets.ROOT }}
         run: python update_db.py
