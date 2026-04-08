@@ -4,3 +4,6 @@ numpy
 plotly
 PyMySQL
 SQLAlchemy
+cryptography
+pykrx
+yfinance
