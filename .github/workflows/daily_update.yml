@@ -27,6 +27,6 @@ jobs:
 
       - name: Run Update Script to MySQL
         env:
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_USER: ${{ secrets.YYY }}
+          DB_PASSWORD: ${{ secrets.ROOT }}
         run: python update_db.py
