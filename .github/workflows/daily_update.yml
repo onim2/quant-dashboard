@@ -1,0 +1,28 @@
+name: Quant Data Daily Auto-Update
+
+on:
+  schedule:
+    - cron: '30 07 * * *' # 한국시간 오후 4시 30분 자동 실행
+  workflow_dispatch:      # 수동 실행 버튼 활성화
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/checkout@v3
+        with:
+          python-version: '3.9'
+
+      - name: Install libraries
+        run: |
+          pip install yfinance pandas sqlalchemy pymysql cryptography
+
+      - name: Run Update Script
+        env:
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: python update_db.py
