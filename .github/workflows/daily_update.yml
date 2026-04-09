@@ -19,7 +19,7 @@ jobs:
 
       - name: Install libraries
         run: |
-          pip install pandas sqlalchemy pymysql cryptography pykrx==1.0.45
+          pip install pandas sqlalchemy pymysql cryptography pykrx
 
       - name: Run Update Script
         env:
