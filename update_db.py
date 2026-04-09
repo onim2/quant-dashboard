@@ -1,5 +1,4 @@
 import os
-import builtins
 import pandas as pd
 from sqlalchemy import create_engine, text
 from pykrx import stock
@@ -15,46 +14,6 @@ db_name     = "stock_db"
 engine = create_engine(
     f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}?charset=utf8mb4"
 )
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ✅ pykrx 내부 버그 패치
-#
-# 문제: KRX API가 '5804.7' 같은 float 문자열 반환 → pykrx 내부 int() 에러
-#
-# 해결: 메타클래스의 __instancecheck__ 오버라이드
-#   → isinstance(3306, int)  처럼 기존 int 값도 True 반환 (PyMySQL 포트 체크 통과)
-#   → isinstance(x, int)     타입 체크 전부 정상 작동
-#   → int('5804.7')          → 5804 로 변환 처리
-# ══════════════════════════════════════════════════════════════════════════════
-_OriginalInt = builtins.int
-
-class _PatchedIntMeta(type):
-    """기존 int 인스턴스도 isinstance 통과시키는 메타클래스"""
-    def __instancecheck__(cls, instance):
-        # 기존 int 인스턴스 OR _PatchedInt 인스턴스 둘 다 True
-        return (type.__instancecheck__(_OriginalInt, instance) or
-                type.__instancecheck__(cls, instance))
-
-    def __subclasscheck__(cls, subclass):
-        # 기존 int 서브클래스 OR _PatchedInt 서브클래스 둘 다 True
-        return (type.__subclasscheck__(_OriginalInt, subclass) or
-                type.__subclasscheck__(cls, subclass))
-
-class _PatchedInt(_OriginalInt, metaclass=_PatchedIntMeta):
-    """float 문자열('5804.7')도 처리하는 int"""
-    def __new__(cls, x=0, *args, **kwargs):
-        if isinstance(x, str) and '.' in x and not args and not kwargs:
-            try:
-                return _OriginalInt.__new__(cls, _OriginalInt(float(x)))
-            except (ValueError, TypeError):
-                pass
-        try:
-            return _OriginalInt.__new__(cls, x, *args, **kwargs)
-        except TypeError:
-            return _OriginalInt.__new__(cls, x)
-
-builtins.int = _PatchedInt
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ── 2. 시장 데이터 수집 ──────────────────────────────────────────────────────
