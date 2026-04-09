@@ -19,11 +19,10 @@ jobs:
 
       - name: Install libraries
         run: |
-          pip install pandas sqlalchemy pymysql cryptography pykrx==1.0.47
+          pip install pandas sqlalchemy pymysql cryptography pykrx==1.0.45
 
       - name: Run Update Script
         env:
-          # 금고 상자 이름(Secrets)을 대문자 ROOT와 YYY로 정확히 연결
           DB_USER: ${{ secrets.YYY }}
           DB_PASSWORD: ${{ secrets.ROOT }}
         run: python update_db.py
