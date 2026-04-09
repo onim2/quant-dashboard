@@ -1,9 +1,32 @@
 import os
+import builtins
 import pandas as pd
 from sqlalchemy import create_engine, text
 from pykrx import stock
 from datetime import datetime, timedelta
 import time
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ✅ pykrx 내부 버그 패치
+# KRX API가 지수값을 float 문자열('5804.7')로 반환하기 시작했는데
+# pykrx 내부에서 int('5804.7') 를 호출해 에러 발생 → 전역 패치로 해결
+# ══════════════════════════════════════════════════════════════════════════════
+_original_int = builtins.int
+
+def _patched_int(x=0, *args, **kwargs):
+    if isinstance(x, str) and not args and not kwargs:
+        try:
+            return _original_int(x)
+        except ValueError:
+            try:
+                return _original_int(float(x))   # '5804.7' → 5804
+            except (ValueError, TypeError):
+                raise ValueError(f"invalid literal for int() with base 10: '{x}'")
+    return _original_int(x, *args, **kwargs)
+
+builtins.int = _patched_int
+# ══════════════════════════════════════════════════════════════════════════════
+
 
 # ── 1. DB 접속 정보 ─────────────────────────────────────────────────────────
 db_user     = os.getenv('DB_USER')
@@ -25,12 +48,9 @@ def get_market_data(target_date_str, market_name):
     """
     mkt = "KOSPI" if "kospi" in market_name else "KOSDAQ"
 
-    # ✅ 핵심 수정: get_market_ohlcv(date, market) 사용
-    # - 이전 코드의 get_market_ohlcv_by_date(date, date, "KOSPI") 는
-    #   "KOSPI"를 티커로 인식해 지수값(5804.7 등)을 반환하는 버그 발생
-    # - get_market_ohlcv(date, market=mkt) 가 전 종목 시세를 반환하는 올바른 함수
+    # [시세 수집]
     try:
-        df_price = stock.get_market_ohlcv(target_date_str, market=mkt)
+        df_price = stock.get_market_ohlcv_by_date(target_date_str, target_date_str, mkt)
     except Exception as e:
         print(f"    pykrx 시세 수집 실패: {e}")
         return pd.DataFrame()
@@ -52,27 +72,32 @@ def get_market_data(target_date_str, market_name):
             target_date_str, target_date_str, mkt
         )
     except Exception as e:
-        print(f"    pykrx 수급 수집 실패: {e}")
-        return pd.DataFrame()
+        print(f"    pykrx 수급 수집 실패 (0으로 채움): {e}")
+        df_investor = pd.DataFrame()
 
     # [데이터 정리]
-    # get_market_ohlcv 의 인덱스는 티커코드
     df_price = df_price.reset_index()
-    df_price.rename(columns={'티커': '티커'}, inplace=True)  # 인덱스명 확인용 (보통 '티커' 또는 index)
-
-    # 인덱스 컬럼명이 다를 수 있으므로 첫 번째 컬럼을 '티커'로 통일
     first_col = df_price.columns[0]
     df_price.rename(columns={first_col: '티커'}, inplace=True)
 
     df_price['nm']   = df_price['티커'].map(ticker_names)
     df_price['date'] = pd.to_datetime(target_date_str, format='%Y%m%d').strftime('%Y-%m-%d')
 
-    # nm 이 없는 행(지수 등 잡데이터) 제거
-    df_price = df_price[df_price['nm'].notna()]
+    # nm 없는 행(지수 등) 제거
+    df_price = df_price[df_price['nm'].notna()].copy()
 
-    final = pd.merge(df_price, df_investor, left_on='티커', right_on='티커', how='left')
+    if df_investor.empty:
+        df_price['for_net']  = 0
+        df_price['inst_net'] = 0
+        df_price['ind_net']  = 0
+        final = df_price
+    else:
+        df_investor = df_investor.reset_index()
+        inv_first = df_investor.columns[0]
+        df_investor.rename(columns={inv_first: '티커'}, inplace=True)
+        final = pd.merge(df_price, df_investor, on='티커', how='left')
 
-    # 컬럼명 → DB 스키마 컬럼명으로 변환
+    # 컬럼명 → DB 스키마
     final = final.rename(columns={
         '시가'    : 'open',
         '고가'    : 'high',
@@ -85,37 +110,30 @@ def get_market_data(target_date_str, market_name):
         '개인'    : 'ind_net',
     })
 
-    # 필요 컬럼이 없으면 0으로 채움 (수급 merge 실패 대비)
+    # 누락 컬럼 보정
     for col in ['for_net', 'inst_net', 'ind_net']:
         if col not in final.columns:
             final[col] = 0
 
     # ── DB 스키마에 맞게 타입 변환 ───────────────────────────────────────────
-    # date : datetime
     final['date'] = pd.to_datetime(final['date'])
 
-    # open, high, low, close : kospi=FLOAT / kosdaq=DOUBLE → float
     for col in ['open', 'high', 'low', 'close']:
         final[col] = pd.to_numeric(final[col], errors='coerce').astype(float)
 
-    # volume : BIGINT
     final['volume'] = (
         pd.to_numeric(final['volume'], errors='coerce')
         .fillna(0).round(0).astype('int64')
     )
-
-    # change_rate : float
     final['change_rate'] = pd.to_numeric(final['change_rate'], errors='coerce').astype(float)
 
     if "kospi" in market_name:
-        # kospi → for_net, inst_net, ind_net : BIGINT
         for col in ['for_net', 'inst_net', 'ind_net']:
             final[col] = (
                 pd.to_numeric(final[col], errors='coerce')
                 .fillna(0).round(0).astype('int64')
             )
     else:
-        # kosdaq → for_net, inst_net, ind_net : DOUBLE
         for col in ['for_net', 'inst_net', 'ind_net']:
             final[col] = (
                 pd.to_numeric(final[col], errors='coerce')
@@ -130,14 +148,12 @@ def get_market_data(target_date_str, market_name):
 def update_process():
     today = datetime.now()
 
-    # 최근 10일치를 훑으며 누락 데이터를 채웁니다
     for i in range(10):
         target_dt      = (today - timedelta(days=i)).strftime('%Y%m%d')
         target_date_db = (today - timedelta(days=i)).strftime('%Y-%m-%d')
 
         for table in ["kospi_stocks", "kosdaq_stocks"]:
             try:
-                # 중복 체크
                 query        = text(f"SELECT count(*) as cnt FROM {table} WHERE date LIKE :dt")
                 existing_cnt = pd.read_sql(
                     query, engine, params={"dt": f"{target_date_db}%"}
