@@ -6,31 +6,42 @@ from pykrx import stock
 from datetime import datetime, timedelta
 import time
 
-# ── 1. DB 접속 정보 & 엔진 생성 (반드시 int 패치 전에 실행) ────────────────
+# ── 1. DB 접속 정보 & 엔진 생성 ─────────────────────────────────────────────
 db_user     = os.getenv('DB_USER')
 db_password = os.getenv('DB_PASSWORD')
 db_host     = "34.50.62.220"
 db_name     = "stock_db"
 
-# Google Cloud SQL: 암호화되지 않은 직접 연결 허용 상태 → ssl 옵션 제거
 engine = create_engine(
     f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}?charset=utf8mb4"
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ✅ pykrx 내부 버그 패치 (engine 생성 후 적용)
+# ✅ pykrx 내부 버그 패치
 #
-# 문제: KRX API가 지수값을 '5804.7' 같은 float 문자열로 반환
-#       pykrx 내부에서 int('5804.7') 호출 → ValueError 발생
+# 문제: KRX API가 '5804.7' 같은 float 문자열 반환 → pykrx 내부 int() 에러
 #
-# 해결: builtins.int 를 int 서브클래스로 교체
-#       → isinstance(x, int) 등 타입 체크 정상 작동 유지
-#       → int('5804.7') → 5804 로 처리
+# 해결: 메타클래스의 __instancecheck__ 오버라이드
+#   → isinstance(3306, int)  처럼 기존 int 값도 True 반환 (PyMySQL 포트 체크 통과)
+#   → isinstance(x, int)     타입 체크 전부 정상 작동
+#   → int('5804.7')          → 5804 로 변환 처리
 # ══════════════════════════════════════════════════════════════════════════════
 _OriginalInt = builtins.int
 
-class _PatchedInt(_OriginalInt):
-    """float 문자열도 처리하는 int 서브클래스"""
+class _PatchedIntMeta(type):
+    """기존 int 인스턴스도 isinstance 통과시키는 메타클래스"""
+    def __instancecheck__(cls, instance):
+        # 기존 int 인스턴스 OR _PatchedInt 인스턴스 둘 다 True
+        return (type.__instancecheck__(_OriginalInt, instance) or
+                type.__instancecheck__(cls, instance))
+
+    def __subclasscheck__(cls, subclass):
+        # 기존 int 서브클래스 OR _PatchedInt 서브클래스 둘 다 True
+        return (type.__subclasscheck__(_OriginalInt, subclass) or
+                type.__subclasscheck__(cls, subclass))
+
+class _PatchedInt(_OriginalInt, metaclass=_PatchedIntMeta):
+    """float 문자열('5804.7')도 처리하는 int"""
     def __new__(cls, x=0, *args, **kwargs):
         if isinstance(x, str) and '.' in x and not args and not kwargs:
             try:
