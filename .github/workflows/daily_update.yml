@@ -21,6 +21,9 @@ jobs:
         run: |
           pip install pandas sqlalchemy pymysql cryptography pykrx
 
+      - name: Patch pykrx bug
+        run: python patch_pykrx.py
+
       - name: Run Update Script
         env:
           DB_USER: ${{ secrets.YYY }}
