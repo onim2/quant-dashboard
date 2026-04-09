@@ -6,38 +6,44 @@ from pykrx import stock
 from datetime import datetime, timedelta
 import time
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ✅ pykrx 내부 버그 패치
-# KRX API가 지수값을 float 문자열('5804.7')로 반환하기 시작했는데
-# pykrx 내부에서 int('5804.7') 를 호출해 에러 발생 → 전역 패치로 해결
-# ══════════════════════════════════════════════════════════════════════════════
-_original_int = builtins.int
-
-def _patched_int(x=0, *args, **kwargs):
-    if isinstance(x, str) and not args and not kwargs:
-        try:
-            return _original_int(x)
-        except ValueError:
-            try:
-                return _original_int(float(x))   # '5804.7' → 5804
-            except (ValueError, TypeError):
-                raise ValueError(f"invalid literal for int() with base 10: '{x}'")
-    return _original_int(x, *args, **kwargs)
-
-builtins.int = _patched_int
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# ── 1. DB 접속 정보 ─────────────────────────────────────────────────────────
+# ── 1. DB 접속 정보 & 엔진 생성 (반드시 int 패치 전에 실행) ────────────────
 db_user     = os.getenv('DB_USER')
 db_password = os.getenv('DB_PASSWORD')
 db_host     = "34.50.62.220"
 db_name     = "stock_db"
 
+# Google Cloud SQL: 암호화되지 않은 직접 연결 허용 상태 → ssl 옵션 제거
 engine = create_engine(
-    f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}?charset=utf8mb4",
-    connect_args={"ssl": {}}
+    f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}?charset=utf8mb4"
 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ✅ pykrx 내부 버그 패치 (engine 생성 후 적용)
+#
+# 문제: KRX API가 지수값을 '5804.7' 같은 float 문자열로 반환
+#       pykrx 내부에서 int('5804.7') 호출 → ValueError 발생
+#
+# 해결: builtins.int 를 int 서브클래스로 교체
+#       → isinstance(x, int) 등 타입 체크 정상 작동 유지
+#       → int('5804.7') → 5804 로 처리
+# ══════════════════════════════════════════════════════════════════════════════
+_OriginalInt = builtins.int
+
+class _PatchedInt(_OriginalInt):
+    """float 문자열도 처리하는 int 서브클래스"""
+    def __new__(cls, x=0, *args, **kwargs):
+        if isinstance(x, str) and '.' in x and not args and not kwargs:
+            try:
+                return _OriginalInt.__new__(cls, _OriginalInt(float(x)))
+            except (ValueError, TypeError):
+                pass
+        try:
+            return _OriginalInt.__new__(cls, x, *args, **kwargs)
+        except TypeError:
+            return _OriginalInt.__new__(cls, x)
+
+builtins.int = _PatchedInt
+# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ── 2. 시장 데이터 수집 ──────────────────────────────────────────────────────
@@ -76,15 +82,12 @@ def get_market_data(target_date_str, market_name):
         df_investor = pd.DataFrame()
 
     # [데이터 정리]
-    df_price = df_price.reset_index()
-    first_col = df_price.columns[0]
+    df_price         = df_price.reset_index()
+    first_col        = df_price.columns[0]
     df_price.rename(columns={first_col: '티커'}, inplace=True)
-
     df_price['nm']   = df_price['티커'].map(ticker_names)
     df_price['date'] = pd.to_datetime(target_date_str, format='%Y%m%d').strftime('%Y-%m-%d')
-
-    # nm 없는 행(지수 등) 제거
-    df_price = df_price[df_price['nm'].notna()].copy()
+    df_price         = df_price[df_price['nm'].notna()].copy()
 
     if df_investor.empty:
         df_price['for_net']  = 0
@@ -93,7 +96,7 @@ def get_market_data(target_date_str, market_name):
         final = df_price
     else:
         df_investor = df_investor.reset_index()
-        inv_first = df_investor.columns[0]
+        inv_first   = df_investor.columns[0]
         df_investor.rename(columns={inv_first: '티커'}, inplace=True)
         final = pd.merge(df_price, df_investor, on='티커', how='left')
 
@@ -110,12 +113,11 @@ def get_market_data(target_date_str, market_name):
         '개인'    : 'ind_net',
     })
 
-    # 누락 컬럼 보정
     for col in ['for_net', 'inst_net', 'ind_net']:
         if col not in final.columns:
             final[col] = 0
 
-    # ── DB 스키마에 맞게 타입 변환 ───────────────────────────────────────────
+    # ── DB 스키마 타입 변환 ──────────────────────────────────────────────────
     final['date'] = pd.to_datetime(final['date'])
 
     for col in ['open', 'high', 'low', 'close']:
