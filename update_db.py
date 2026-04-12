@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError, ProgrammingError, DataError
@@ -19,7 +20,7 @@ engine = create_engine(
 
 
 # ── 2. 거래일 교차검증 ───────────────────────────────────────────────────────
-def is_trading_day(target_date_str: str, mkt: str) -> bool | None:
+def is_trading_day(target_date_str: str, mkt: str) -> Optional[bool]:
     """
     pykrx 거래일 캘린더로 실제 휴장일 여부를 교차검증.
 
